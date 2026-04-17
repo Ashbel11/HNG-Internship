@@ -173,13 +173,15 @@ async def fetch_all(name: str):
     result = []
     for i, resp in enumerate(responses):
         if isinstance(resp, Exception) or resp.status_code != 200:
-            raise HTTPException(
-                status_code=502,
-                detail={"status": "502", "message": f"{names[i]} returned an invalid response"},
-            )
-        result.append(resp.json())
+            raise HTTPException(502, detail={"status": "502", "message": f"{names[i]} returned an invalid response"})
+        
+        data = resp.json()
+        
+        if "error" in data:
+            raise HTTPException(502, detail={"status": "502", "message": f"{names[i]} returned an invalid response"})
+        
+        result.append(data)
     return result[0], result[1], result[2]
-
 
 def validate_apis(g, a, n):
     if not g.get("gender") is None  or g.get("count", 0) == 0:
