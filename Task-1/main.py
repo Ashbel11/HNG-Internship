@@ -182,7 +182,7 @@ async def fetch_all(name: str):
 
 
 def validate_apis(g, a, n):
-    if not g.get("gender") or not g.get("count"):
+    if not g.get("gender") is None  or g.get("count", 0) == 0:
         raise HTTPException(502, detail={"status": "502", "message": "Genderize returned an invalid response"})
     if a.get("age") is None:
         raise HTTPException(502, detail={"status": "502", "message": "Agify returned an invalid response"})
@@ -281,6 +281,17 @@ async def create_profile(request: Request):
         },
     )
 
+@app.get("/debug")
+async def debug():
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        g = await client.get("https://api.genderize.io", params={"name": "ella"})
+        a = await client.get("https://api.agify.io", params={"name": "ella"})
+        n = await client.get("https://api.nationalize.io", params={"name": "ella"})
+    return {
+        "genderize": g.json(),
+        "agify": a.json(),
+        "nationalize": n.json()
+    }
 
 @app.get("/api/profiles")
 def list_profiles(
