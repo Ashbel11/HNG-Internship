@@ -184,7 +184,7 @@ async def fetch_all(name: str):
     return result[0], result[1], result[2]
 
 def validate_apis(g, a, n):
-    if not g.get("gender") is None  or g.get("count", 0) == 0:
+    if g.get("gender") is None  or g.get("count", 0) == 0:
         raise HTTPException(502, detail={"status": "502", "message": "Genderize returned an invalid response"})
     if a.get("age") is None:
         raise HTTPException(502, detail={"status": "502", "message": "Agify returned an invalid response"})
