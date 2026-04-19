@@ -1,23 +1,29 @@
 import asyncio, httpx, os, sqlite3, time, uuid
 from datetime import datetime, timezone
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Any
 
 app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# ── CORS — raw middleware so header is ALWAYS present regardless of Origin ─────
+@app.middleware("http")
+async def cors(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers={
+            "Access-Control-Allow-Origin":  "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        })
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"]  = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
 
 # ── Database ──────────────────────────────────────────────────────────────────
-DB_PATH = "/tmp/profiles.db"
-con = sqlite3.connect(DB_PATH, check_same_thread=False)
+con = sqlite3.connect("/tmp/profiles.db", check_same_thread=False)
 con.row_factory = sqlite3.Row
 con.execute("""
     CREATE TABLE IF NOT EXISTS profiles (
@@ -36,7 +42,7 @@ def uuidv7() -> str:
     lo    = 0x8000000000000000 | (rand & 0x3FFFFFFFFFFFFFFF)
     return str(uuid.UUID(int=(hi << 64) | lo))
 
-def age_group(a: int) -> str:
+def classify(a: int) -> str:
     return "child" if a <= 12 else "teenager" if a <= 19 else "adult" if a <= 59 else "senior"
 
 def stamp() -> str:
@@ -48,29 +54,25 @@ def err(code: int, msg: str):
 def err502(api: str):
     return JSONResponse(status_code=502, content={"status": "502", "message": f"{api} returned an invalid response"})
 
-# ── Schema ────────────────────────────────────────────────────────────────────
 class NameBody(BaseModel):
     name: Any = None
 
 # ── POST /api/profiles ────────────────────────────────────────────────────────
-@app.post("/api/profiles", status_code=201)
+@app.post("/api/profiles")
 async def create_profile(body: NameBody):
     name = body.name
-
     if name is None:              return err(400, "Missing or empty name")
     if not isinstance(name, str): return err(422, "Invalid type")
     if not name.strip():          return err(400, "Missing or empty name")
 
-    # Idempotency
     row = con.execute("SELECT * FROM profiles WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
     if row:
         return JSONResponse(status_code=200, content={
             "status": "success", "message": "Profile already exists", "data": dict(row)
         })
 
-    # Fetch all 3 external APIs in parallel
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
             g_res, a_res, n_res = await asyncio.gather(
                 client.get(f"https://api.genderize.io?name={name}"),
                 client.get(f"https://api.agify.io?name={name}"),
@@ -78,15 +80,13 @@ async def create_profile(body: NameBody):
             )
         g, a, n = g_res.json(), a_res.json(), n_res.json()
     except Exception as e:
-        return err(500, f"Failed to reach external APIs: {str(e)}")
+        return err(500, f"External API unreachable: {str(e)}")
 
-    # Validate each response
     if not g.get("gender") or not g.get("count"):  return err502("Genderize")
     if a.get("age") is None:                        return err502("Agify")
     if not n.get("country"):                        return err502("Nationalize")
 
     top = max(n["country"], key=lambda c: c["probability"])
-
     profile = {
         "id":                  uuidv7(),
         "name":                name,
@@ -94,12 +94,11 @@ async def create_profile(body: NameBody):
         "gender_probability":  g["probability"],
         "sample_size":         g["count"],
         "age":                 a["age"],
-        "age_group":           age_group(a["age"]),
+        "age_group":           classify(a["age"]),
         "country_id":          top["country_id"],
         "country_probability": top["probability"],
         "created_at":          stamp(),
     }
-
     con.execute("INSERT INTO profiles VALUES (?,?,?,?,?,?,?,?,?,?)", list(profile.values()))
     con.commit()
     return JSONResponse(status_code=201, content={"status": "success", "data": profile})
@@ -122,14 +121,24 @@ def get_profile(profile_id: str):
     return {"status": "success", "data": dict(row)}
 
 # ── DELETE /api/profiles/{id} ─────────────────────────────────────────────────
-@app.delete("/api/profiles/{profile_id}", status_code=204)
+@app.delete("/api/profiles/{profile_id}")
 def delete_profile(profile_id: str):
     cur = con.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
     con.commit()
     if cur.rowcount == 0: return err(404, "Profile not found")
     return Response(status_code=204)
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Debug — see raw external API responses ────────────────────────────────────
+@app.get("/api/debug/{name}")
+async def debug(name: str):
+    async with httpx.AsyncClient(timeout=20) as client:
+        g, a, n = await asyncio.gather(
+            client.get(f"https://api.genderize.io?name={name}"),
+            client.get(f"https://api.agify.io?name={name}"),
+            client.get(f"https://api.nationalize.io?name={name}"),
+        )
+    return {"genderize": g.json(), "agify": a.json(), "nationalize": n.json()}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
