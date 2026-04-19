@@ -1,16 +1,23 @@
 import asyncio, httpx, os, sqlite3, time, uuid
 from datetime import datetime, timezone
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from typing import Any
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── Database ──────────────────────────────────────────────────────────────────
-con = sqlite3.connect("profiles.db", check_same_thread=False)
+DB_PATH = "/tmp/profiles.db"
+con = sqlite3.connect(DB_PATH, check_same_thread=False)
 con.row_factory = sqlite3.Row
 con.execute("""
     CREATE TABLE IF NOT EXISTS profiles (
@@ -50,9 +57,9 @@ class NameBody(BaseModel):
 async def create_profile(body: NameBody):
     name = body.name
 
-    if name is None:                 return err(400, "Missing or empty name")
-    if not isinstance(name, str):    return err(422, "Invalid type")
-    if not name.strip():             return err(400, "Missing or empty name")
+    if name is None:              return err(400, "Missing or empty name")
+    if not isinstance(name, str): return err(422, "Invalid type")
+    if not name.strip():          return err(400, "Missing or empty name")
 
     # Idempotency
     row = con.execute("SELECT * FROM profiles WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
@@ -63,15 +70,15 @@ async def create_profile(body: NameBody):
 
     # Fetch all 3 external APIs in parallel
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=15) as client:
             g_res, a_res, n_res = await asyncio.gather(
                 client.get(f"https://api.genderize.io?name={name}"),
                 client.get(f"https://api.agify.io?name={name}"),
                 client.get(f"https://api.nationalize.io?name={name}"),
             )
         g, a, n = g_res.json(), a_res.json(), n_res.json()
-    except Exception:
-        return err(500, "Internal server error")
+    except Exception as e:
+        return err(500, f"Failed to reach external APIs: {str(e)}")
 
     # Validate each response
     if not g.get("gender") or not g.get("count"):  return err502("Genderize")
@@ -95,7 +102,7 @@ async def create_profile(body: NameBody):
 
     con.execute("INSERT INTO profiles VALUES (?,?,?,?,?,?,?,?,?,?)", list(profile.values()))
     con.commit()
-    return {"status": "success", "data": profile}
+    return JSONResponse(status_code=201, content={"status": "success", "data": profile})
 
 # ── GET /api/profiles ─────────────────────────────────────────────────────────
 @app.get("/api/profiles")
@@ -125,4 +132,4 @@ def delete_profile(profile_id: str):
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=3000, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
