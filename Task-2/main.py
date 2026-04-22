@@ -2,12 +2,17 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+import os
 
 from database import engine, Base
 from routers.profiles import router as profiles_router
 
 # Create all tables on startup
 Base.metadata.create_all(bind=engine)
+
+if os.path.exists("profiles_seed.json"):  
+    from seed import seed                  
+    seed("profiles_seed.json") 
 
 app = FastAPI(
     title="Insighta Labs Intelligence Query Engine",
