@@ -15,6 +15,8 @@ GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 GITHUB_REDIRECT_URI_WEB = os.getenv("GITHUB_REDIRECT_URI_WEB", "http://localhost:8000/web/auth/callback")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 SECRET_KEY = os.getenv("JWT_SECRET")
+if not SECRET_KEY:
+    raise ValueError("JWT_SECRET environment variable is not set!")
 
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
