@@ -34,6 +34,7 @@ app.add_middleware(
 app.add_middleware(APIVersionMiddleware)    
 app.add_middleware(RateLimitMiddleware)    
 app.add_middleware(RequestLoggingMiddleware)  
+app.mount("/web", StaticFiles(directory="web", html=True), name="web")
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
